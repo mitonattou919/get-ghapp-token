@@ -59,11 +59,14 @@ or `.claude/settings.local.json` for project-specific settings that apply only t
 ```json
 {
   "env": {
-    "GITHUB_APP_ID": "1234567",
-    "GITHUB_APP_PEM_PATH": "/Users/yourname/.config/claude-code-bot/botname.private-key.pem"
+    "GITHUB_APP_ID": "1234567"
   }
 }
 ```
+
+> **Warning**: Do **not** set `GITHUB_APP_PEM_PATH` in Claude Code's settings.json.
+> Claude Code has file system access and could read the private key file if its path is exposed via environment variables.
+> Set `GITHUB_APP_PEM_PATH` only in your shell profile (e.g. `~/.zshrc`, `~/.bashrc`) outside of Claude Code's configuration.
 
 > **Note**: `settings.local.json` is automatically added to `.gitignore`, so there is no risk of accidentally committing it.
 
