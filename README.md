@@ -98,6 +98,35 @@ TOKEN=$(./get-ghapp-token.sh)
 curl -H "Authorization: Bearer $TOKEN" https://api.github.com/repos/your-org/your-repo
 ```
 
+## Claude Code Integration
+
+When using this script with Claude Code, define a shell function in your `~/.zshrc` or `~/.bashrc` to automatically set up the token before launching Claude.
+
+```zsh
+claude-gh() {
+  export GITHUB_APP_ID=1234567
+  export GITHUB_APP_PEM_PATH=~/.config/claude-code-bot/botname.private-key.pem
+  export GH_TOKEN=$(~/.config/claude-code-bot/get-ghapp-token.sh)
+
+  # Configure git credential helper for this process only (no global config changes)
+  export GIT_CONFIG_COUNT=1
+  export GIT_CONFIG_KEY_0=credential.helper
+  export GIT_CONFIG_VALUE_0="!f() { echo username=x-access-token; echo password=\$GH_TOKEN; }; f"
+
+  claude "$@"
+}
+```
+
+Using `GIT_CONFIG_*` environment variables instead of `gh auth setup-git` scopes the git credential helper to the Claude process only, leaving your global `~/.gitconfig` untouched.
+
+| Approach | Scope | Modifies config file |
+|----------|-------|----------------------|
+| `gh auth setup-git` | Global | Yes (`~/.gitconfig`) |
+| `git config --local` | Project | Yes (`.git/config`) |
+| `GIT_CONFIG_*` env vars | Process | No |
+
+With this setup, both `gh` commands and `git` commands work with the GitHub App token inside Claude Code sessions.
+
 ## Security
 
 - **Never commit the private key (PEM) to a repository**
