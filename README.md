@@ -29,16 +29,22 @@ Store the private key in the macOS Keychain instead of on disk. It must be
 base64-encoded before being stored — Keychain does not reliably round-trip
 raw multi-line secrets — and is decoded only in-memory when signing.
 
+The Keychain service is namespaced per App ID (`ghapp-token:<APP_ID>`), so
+multiple GitHub Apps can each keep their own PEM/token without colliding:
+
 ```bash
 security add-generic-password -U \
-  -a "github-app-pem" -s "claude-code-bot" \
+  -a "pem" -s "ghapp-token:1234567" \
   -w "$(openssl base64 -A < /path/to/your-app.private-key.pem)"
 ```
 
-`-U` makes this idempotent — safe to re-run when rotating the key.
+`-U` makes this idempotent — safe to re-run when rotating the key. Replace
+`1234567` with your App ID, or override the service label entirely with
+`GITHUB_APP_KEYCHAIN_SERVICE`.
 
-The App ID is not stored in Keychain; it still must be provided via
-`GITHUB_APP_ID` or a CLI argument (see below).
+The App ID itself is not stored in Keychain; it still must be provided via
+`GITHUB_APP_ID` or a CLI argument (see below) — the script needs it up
+front to know which Keychain service to look in.
 
 ### Option B: File-based
 
@@ -60,6 +66,7 @@ Set the following environment variables.
 |----------|-------------|---------|
 | `GITHUB_APP_ID` | GitHub App's App ID | (required) |
 | `GITHUB_APP_PEM_PATH` | Path to the private key file | `~/.config/claude-code-bot/botname.private-key.pem` |
+| `GITHUB_APP_KEYCHAIN_SERVICE` | Override the Keychain service label | `ghapp-token:<APP_ID>` |
 
 The App ID can be found at `General > App ID` in the GitHub App settings page.
 
@@ -94,7 +101,7 @@ or `.claude/settings.local.json` for project-specific settings that apply only t
 | Credential | Priority order |
 |------------|-----------------|
 | App ID | `GITHUB_APP_ID` env var → CLI argument |
-| Private key | macOS Keychain (`github-app-pem`, base64-encoded) → file at `GITHUB_APP_PEM_PATH` |
+| Private key | macOS Keychain (service `ghapp-token:<APP_ID>`, account `pem`, base64-encoded) → file at `GITHUB_APP_PEM_PATH` |
 
 If `security` is unavailable (non-macOS) or no Keychain entry is registered,
 the script falls back to the file-based PEM lookup silently — no error, no
@@ -160,10 +167,14 @@ With this setup, both `gh` commands and `git` commands work with the GitHub App 
 ## Automatic Token Refresh (Cron)
 
 `refresh-ghapp-token.sh` mints a fresh installation token via
-`get-ghapp-token.sh` and caches it in the macOS Keychain (account
-`github-installation-token`, service `claude-code-bot`), so other tooling
+`get-ghapp-token.sh` and caches it in the macOS Keychain (service
+`ghapp-token:<APP_ID>`, account `installation-token`), so other tooling
 can read a ready-made token instantly instead of making a live API call on
 every use. On failure, the previously cached token is left untouched.
+
+Like `get-ghapp-token.sh`, it takes the App ID via `GITHUB_APP_ID` or as
+the first argument (`./refresh-ghapp-token.sh 1234567`) — it needs this up
+front to know which per-App Keychain service to write into.
 
 ```bash
 chmod +x refresh-ghapp-token.sh
@@ -197,7 +208,7 @@ Downstream tooling can read the cached token directly from Keychain instead
 of invoking `get-ghapp-token.sh` synchronously:
 
 ```bash
-security find-generic-password -a "github-installation-token" -s "claude-code-bot" -w
+security find-generic-password -a "installation-token" -s "ghapp-token:1234567" -w
 ```
 
 This is an optional pattern — for example, `claude-gh()` above could
@@ -207,7 +218,7 @@ interval) for skipping a live API call each time:
 
 ```zsh
 claude-gh-cached() {
-  export GH_TOKEN=$(security find-generic-password -a "github-installation-token" -s "claude-code-bot" -w)
+  export GH_TOKEN=$(security find-generic-password -a "installation-token" -s "ghapp-token:1234567" -w)
   export GIT_CONFIG_COUNT=1
   export GIT_CONFIG_KEY_0=credential.helper
   export GIT_CONFIG_VALUE_0='!f() { echo username=x-access-token; echo password=$GH_TOKEN; }; f'
@@ -235,7 +246,7 @@ claude-gh-cached() {
 | Error Message | Cause | Resolution |
 |---------------|-------|------------|
 | `APP_ID is not set` | `GITHUB_APP_ID` environment variable is not set | Set the environment variable or pass it as an argument |
-| `Private key not found` | The PEM is absent from both Keychain and `GITHUB_APP_PEM_PATH` | Register via `security add-generic-password` (base64-encoded) or fix `GITHUB_APP_PEM_PATH` |
+| `Private key not found` | The PEM is absent from both Keychain (service `ghapp-token:<APP_ID>`, account `pem`) and `GITHUB_APP_PEM_PATH` | Register via `security add-generic-password` (base64-encoded) or fix `GITHUB_APP_PEM_PATH` |
 | `Failed to sign JWT. Check the PEM stored in Keychain.` | The Keychain entry isn't valid base64, or decodes to a corrupt/invalid PEM | Re-run the `security add-generic-password -U` command with a fresh `openssl base64 -A` encode of a known-good PEM |
 | `Failed to sign JWT. Check your PEM file.` | The PEM file is corrupted or in an invalid format | Regenerate the key from the GitHub App settings page |
 | `Failed to access GitHub API` | Network error or invalid JWT | Verify the App ID and PEM combination |

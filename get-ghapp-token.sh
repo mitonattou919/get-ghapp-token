@@ -1,19 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ── Keychain helpers (macOS only) ─────────────────────
-# Silently falls back to the file-based lookup when `security` is
-# unavailable (non-macOS) or no Keychain entry is registered.
-KEYCHAIN_SERVICE="claude-code-bot"
-PEM_KEYCHAIN_ACCOUNT="github-app-pem"
-
-keychain_get() {
-  local account="$1"
-  if command -v security &>/dev/null; then
-    security find-generic-password -a "$account" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true
-  fi
-}
-
 # ── Configuration ─────────────────────────────────────
 # APP_ID: GitHub App ID
 #   Option 1: Set GITHUB_APP_ID environment variable
@@ -22,8 +9,32 @@ keychain_get() {
 #        ./get-token.sh 1234567
 APP_ID="${GITHUB_APP_ID:-${1:-}}"
 
+# ── Validation ────────────────────────────────────────
+if [[ -z "$APP_ID" ]]; then
+  echo "Error: APP_ID is not set" >&2
+  echo "Usage: GITHUB_APP_ID=<id> $0" >&2
+  echo "       $0 <app_id>" >&2
+  exit 1
+fi
+
+# ── Keychain helpers (macOS only) ─────────────────────
+# Silently falls back to the file-based lookup when `security` is
+# unavailable (non-macOS) or no Keychain entry is registered. The
+# service is namespaced per App ID so multiple GitHub Apps (agents) can
+# each keep their own PEM/token without colliding; override with
+# GITHUB_APP_KEYCHAIN_SERVICE for a custom label.
+KEYCHAIN_SERVICE="${GITHUB_APP_KEYCHAIN_SERVICE:-ghapp-token:${APP_ID}}"
+PEM_KEYCHAIN_ACCOUNT="pem"
+
+keychain_get() {
+  local account="$1"
+  if command -v security &>/dev/null; then
+    security find-generic-password -a "$account" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true
+  fi
+}
+
 # PEM: Private key
-#   Priority: macOS Keychain (base64-encoded, account "github-app-pem")
+#   Priority: macOS Keychain (base64-encoded, account "pem")
 #            > file at GITHUB_APP_PEM_PATH (or default path)
 #   Storing raw multi-line PEM text in Keychain does not round-trip
 #   reliably, so the Keychain entry holds base64-encoded content,
@@ -34,14 +45,6 @@ PEM_CONTENT=""
 PEM_B64="$(keychain_get "$PEM_KEYCHAIN_ACCOUNT")"
 if [[ -n "$PEM_B64" ]]; then
   PEM_CONTENT="$(printf '%s' "$PEM_B64" | openssl base64 -d -A 2>/dev/null || true)"
-fi
-
-# ── Validation ────────────────────────────────────────
-if [[ -z "$APP_ID" ]]; then
-  echo "Error: APP_ID is not set" >&2
-  echo "Usage: GITHUB_APP_ID=<id> $0" >&2
-  echo "       $0 <app_id>" >&2
-  exit 1
 fi
 
 if [[ -z "$PEM_CONTENT" ]] && [[ ! -f "$PEM_PATH" ]]; then
