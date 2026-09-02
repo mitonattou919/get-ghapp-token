@@ -3,11 +3,11 @@ set -euo pipefail
 
 # refresh-ghapp-token.sh
 #
-# get-ghapp-token.sh で installation token を取得し、macOS Keychain に
-# キャッシュする。cron から定期実行される想定(README参照)。
-# このスクリプト自体はcron登録は行わない。
+# Mints a fresh installation token via get-ghapp-token.sh and caches it
+# in the macOS Keychain. Intended to run periodically via cron (see
+# README) — this script does not install a cron entry itself.
 #
-# 取得に失敗した場合、Keychain上の既存トークンには一切触れない。
+# On failure, the previously cached token in Keychain is left untouched.
 
 KEYCHAIN_SERVICE="claude-code-bot"
 TOKEN_KEYCHAIN_ACCOUNT="github-installation-token"

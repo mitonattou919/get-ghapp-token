@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # ── Keychain helpers (macOS only) ─────────────────────
-# `security` が無い環境(非macOS)やKeychainに未登録の場合は、
-# エラーにせず黙ってファイルベースの読み込みにフォールバックする。
+# Silently falls back to the file-based lookup when `security` is
+# unavailable (non-macOS) or no Keychain entry is registered.
 KEYCHAIN_SERVICE="claude-code-bot"
 PEM_KEYCHAIN_ACCOUNT="github-app-pem"
 
@@ -22,12 +22,12 @@ keychain_get() {
 #        ./get-token.sh 1234567
 APP_ID="${GITHUB_APP_ID:-${1:-}}"
 
-# PEM: 秘密鍵
-#   優先順位: macOS Keychain (base64エンコード済み, account "github-app-pem")
-#            > GITHUB_APP_PEM_PATH のファイル (デフォルトパス含む)
-#   複数行PEMをそのままKeychainに格納すると改行が壊れるため、
-#   Keychainにはbase64エンコードした値を保存し、ここでin-memoryデコードのみ行う。
-#   デコード後の平文PEMをファイルに書き出すことは絶対にしない。
+# PEM: Private key
+#   Priority: macOS Keychain (base64-encoded, account "github-app-pem")
+#            > file at GITHUB_APP_PEM_PATH (or default path)
+#   Storing raw multi-line PEM text in Keychain does not round-trip
+#   reliably, so the Keychain entry holds base64-encoded content,
+#   decoded here in-memory only — never written back out to disk.
 PEM_PATH="${GITHUB_APP_PEM_PATH:-$HOME/.config/claude-code-bot/botname.private-key.pem}"
 
 PEM_CONTENT=""
