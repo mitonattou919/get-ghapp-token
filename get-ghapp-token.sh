@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── Keychain helpers (macOS only) ─────────────────────
+# `security` が無い環境(非macOS)やKeychainに未登録の場合は、
+# エラーにせず黙ってファイルベースの読み込みにフォールバックする。
+KEYCHAIN_SERVICE="claude-code-bot"
+PEM_KEYCHAIN_ACCOUNT="github-app-pem"
+
+keychain_get() {
+  local account="$1"
+  if command -v security &>/dev/null; then
+    security find-generic-password -a "$account" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || true
+  fi
+}
+
 # ── Configuration ─────────────────────────────────────
 # APP_ID: GitHub App ID
 #   Option 1: Set GITHUB_APP_ID environment variable
@@ -9,10 +22,19 @@ set -euo pipefail
 #        ./get-token.sh 1234567
 APP_ID="${GITHUB_APP_ID:-${1:-}}"
 
-# PEM_PATH: Path to the private key file
-#   Override with GITHUB_APP_PEM_PATH environment variable
-#   e.g. GITHUB_APP_PEM_PATH=/path/to/key.pem ./get-token.sh
+# PEM: 秘密鍵
+#   優先順位: macOS Keychain (base64エンコード済み, account "github-app-pem")
+#            > GITHUB_APP_PEM_PATH のファイル (デフォルトパス含む)
+#   複数行PEMをそのままKeychainに格納すると改行が壊れるため、
+#   Keychainにはbase64エンコードした値を保存し、ここでin-memoryデコードのみ行う。
+#   デコード後の平文PEMをファイルに書き出すことは絶対にしない。
 PEM_PATH="${GITHUB_APP_PEM_PATH:-$HOME/.config/claude-code-bot/botname.private-key.pem}"
+
+PEM_CONTENT=""
+PEM_B64="$(keychain_get "$PEM_KEYCHAIN_ACCOUNT")"
+if [[ -n "$PEM_B64" ]]; then
+  PEM_CONTENT="$(printf '%s' "$PEM_B64" | openssl base64 -d -A 2>/dev/null || true)"
+fi
 
 # ── Validation ────────────────────────────────────────
 if [[ -z "$APP_ID" ]]; then
@@ -22,9 +44,11 @@ if [[ -z "$APP_ID" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$PEM_PATH" ]]; then
-  echo "Error: Private key file not found: $PEM_PATH" >&2
-  echo "Override the path with GITHUB_APP_PEM_PATH" >&2
+if [[ -z "$PEM_CONTENT" ]] && [[ ! -f "$PEM_PATH" ]]; then
+  echo "Error: Private key not found" >&2
+  echo "  Not present in Keychain (account: $PEM_KEYCHAIN_ACCOUNT, service: $KEYCHAIN_SERVICE)" >&2
+  echo "  File not found: $PEM_PATH" >&2
+  echo "  Override the path with GITHUB_APP_PEM_PATH, or register in Keychain (see README)" >&2
   exit 1
 fi
 
@@ -45,12 +69,21 @@ HEADER=$(echo -n '{"alg":"RS256","typ":"JWT"}' | b64url)
 NOW=$(date +%s)
 PAYLOAD=$(echo -n "{\"iat\":$((NOW - 60)),\"exp\":$((NOW + 600)),\"iss\":\"$APP_ID\"}" | b64url)
 
-SIG=$(echo -n "${HEADER}.${PAYLOAD}" \
-  | openssl dgst -sha256 -sign "$PEM_PATH" 2>/dev/null \
-  | b64url) || {
-  echo "Error: Failed to sign JWT. Check your PEM file." >&2
-  exit 1
-}
+if [[ -n "$PEM_CONTENT" ]]; then
+  SIG=$(echo -n "${HEADER}.${PAYLOAD}" \
+    | openssl dgst -sha256 -sign <(printf '%s\n' "$PEM_CONTENT") 2>/dev/null \
+    | b64url) || {
+    echo "Error: Failed to sign JWT. Check the PEM stored in Keychain." >&2
+    exit 1
+  }
+else
+  SIG=$(echo -n "${HEADER}.${PAYLOAD}" \
+    | openssl dgst -sha256 -sign "$PEM_PATH" 2>/dev/null \
+    | b64url) || {
+    echo "Error: Failed to sign JWT. Check your PEM file." >&2
+    exit 1
+  }
+fi
 
 JWT="${HEADER}.${PAYLOAD}.${SIG}"
 
