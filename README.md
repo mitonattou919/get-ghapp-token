@@ -131,6 +131,7 @@ Set the following environment variables.
 | `GITHUB_APP_KEYCHAIN_SERVICE` | Override the Keychain service label | `ghapp-token:<APP_ID>` |
 | `GITHUB_APP_INSTALLATION_ID` | Use this installation ID directly, skipping the lookup | (unset — look up instead) |
 | `GITHUB_APP_INSTALLATION_LOGIN` | Pick the installation whose account login matches this value | (unset — use the first installation) |
+| `GITHUB_APP_LOG_FILE` | Append a timestamped log line per step to this file | (unset — no logging) |
 
 The App ID can be found at `General > App ID` in the GitHub App settings page.
 
@@ -147,6 +148,16 @@ GITHUB_APP_INSTALLATION_LOGIN=your-org ./get-ghapp-token.sh
 ```
 
 `GITHUB_APP_INSTALLATION_ID` takes priority over `GITHUB_APP_INSTALLATION_LOGIN` when both are set.
+
+### Logging
+
+Set `GITHUB_APP_LOG_FILE` to a file path to append a timestamped line for each step (PEM resolution, JWT generation, installation lookup, token issuance) — useful when running non-interactively (cron, Docker Sandboxes' `--command`) where stderr isn't easy to see:
+
+```bash
+GITHUB_APP_LOG_FILE=/tmp/ghapp-token.log ./get-ghapp-token.sh
+```
+
+Log output never goes to stdout — only the bare token does, so this is safe to combine with `TOKEN=$(./get-ghapp-token.sh)`. `refresh-ghapp-token.sh` honors the same variable (and passes it through to `get-ghapp-token.sh`, so both scripts' steps land in one file) when it's exported in the environment. Leaving it unset keeps the previous behavior exactly — no log file, no extra overhead.
 
 #### Setting via shell
 
