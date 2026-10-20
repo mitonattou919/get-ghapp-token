@@ -129,8 +129,24 @@ Set the following environment variables.
 | `GITHUB_APP_ID` | GitHub App's App ID | (required) |
 | `GITHUB_APP_PEM_PATH` | Path to the private key file | `~/.config/claude-code-bot/botname.private-key.pem` |
 | `GITHUB_APP_KEYCHAIN_SERVICE` | Override the Keychain service label | `ghapp-token:<APP_ID>` |
+| `GITHUB_APP_INSTALLATION_ID` | Use this installation ID directly, skipping the lookup | (unset — look up instead) |
+| `GITHUB_APP_INSTALLATION_LOGIN` | Pick the installation whose account login matches this value | (unset — use the first installation) |
 
 The App ID can be found at `General > App ID` in the GitHub App settings page.
+
+### Targeting a specific installation
+
+If the GitHub App is installed on more than one org/repo, the script otherwise just uses whichever installation the API returns first — set one of these to target a specific one instead:
+
+```bash
+# Skip the lookup entirely if you already know the installation ID
+GITHUB_APP_INSTALLATION_ID=12345678 ./get-ghapp-token.sh
+
+# Or filter by the installation's account login (org/user)
+GITHUB_APP_INSTALLATION_LOGIN=your-org ./get-ghapp-token.sh
+```
+
+`GITHUB_APP_INSTALLATION_ID` takes priority over `GITHUB_APP_INSTALLATION_LOGIN` when both are set.
 
 #### Setting via shell
 
@@ -164,6 +180,7 @@ or `.claude/settings.local.json` for project-specific settings that apply only t
 |------------|-----------------|
 | App ID | `GITHUB_APP_ID` env var → CLI argument |
 | Private key | macOS Keychain (service `ghapp-token:<APP_ID>`, account `pem`, base64-encoded) → file at `GITHUB_APP_PEM_PATH` |
+| Installation | `GITHUB_APP_INSTALLATION_ID` → `GITHUB_APP_INSTALLATION_LOGIN` match → first installation returned by the API |
 
 If `security` is unavailable (non-macOS) or no Keychain entry is registered,
 the script falls back to the file-based PEM lookup silently — no error, no
@@ -351,6 +368,7 @@ claude-gh-cached() {
 | `Failed to sign JWT. Check your PEM file.` | The PEM file is corrupted or in an invalid format | Regenerate the key from the GitHub App settings page |
 | `Failed to access GitHub API` | Network error or invalid JWT | Verify the App ID and PEM combination |
 | `Installation not found` | The App is not installed on the target repository | Install the GitHub App from its settings page |
+| `No installation found for account '<login>'` | `GITHUB_APP_INSTALLATION_LOGIN` doesn't match any installation's account login | Check the available accounts listed alongside the error, or unset the variable to use the first installation |
 | `'security' command not found` (from `refresh-ghapp-token.sh`) | Running on non-macOS | `refresh-ghapp-token.sh` requires the macOS Keychain; not supported elsewhere |
 | Cron job silently does nothing / stale token never refreshes | Cron's minimal `PATH`/env doesn't have `GITHUB_APP_ID` or `openssl`/`curl`/`jq` | Set `GITHUB_APP_ID` inline on the crontab line; use absolute paths or extend `PATH` in the crontab |
 
