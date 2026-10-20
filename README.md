@@ -13,6 +13,68 @@ Private Key (PEM) → Generate JWT → Get Installation ID → Get Installation 
 2. Retrieve the App's Installation ID via the GitHub API
 3. Issue an Installation Access Token and print it to stdout
 
+### Architecture: Option A (macOS Keychain)
+
+```
+┌───────────────────────────────┐
+│ macOS Keychain                │
+│ service: ghapp-token:<APP_ID> │
+│ account: pem (base64)         │
+└───────────────────────────────┘
+                │
+                │ security find-generic-password -w
+                ▼
+┌─────────────────────────────────────────┐
+│ get-ghapp-token.sh                      │
+│ openssl base64 -d -> PEM                │
+│ (in-memory only, never written to disk) │
+└─────────────────────────────────────────┘
+                     │
+                     │ openssl dgst -sha256 -sign
+                     ▼
+          JWT (RS256, 10 min TTL)
+                     │
+                     │ Authorization: Bearer <JWT>
+                     ▼
+┌────────────────────────────────────────────┐
+│ GitHub API                                 │
+│ GET  /app/installations                    │
+│ POST /app/installations/{id}/access_tokens │
+└────────────────────────────────────────────┘
+                       │
+                       ▼
+      Installation Access Token (stdout)
+```
+
+The PEM only ever exists as base64 text in Keychain and as decoded plaintext in a shell variable — it is never written to disk.
+
+### Architecture: Option B (File-based)
+
+```
+┌──────────────────────────┐
+│ $GITHUB_APP_PEM_PATH     │
+│ botname.private-key.pem  │
+│ (plain PEM file on disk) │
+└──────────────────────────┘
+              │
+              │ openssl dgst -sha256 -sign <file>
+              ▼
+   JWT (RS256, 10 min TTL)
+              │
+              │ Authorization: Bearer <JWT>
+              ▼
+┌────────────────────────────────────────────┐
+│ GitHub API                                 │
+│ GET  /app/installations                    │
+│ POST /app/installations/{id}/access_tokens │
+└────────────────────────────────────────────┘
+                       │
+                       ▼
+      Installation Access Token (stdout)
+```
+
+The PEM is read straight from disk and handed to `openssl` by path — nothing is decoded or cached in memory beforehand.
+
 ## Prerequisites
 
 - bash
@@ -163,6 +225,44 @@ Using `GIT_CONFIG_*` environment variables instead of `gh auth setup-git` scopes
 | `GIT_CONFIG_*` env vars | Process | No |
 
 With this setup, both `gh` commands and `git` commands work with the GitHub App token inside Claude Code sessions.
+
+## Docker Sandboxes Integration
+
+Docker Sandboxes has a built-in `github` secret that is used to authenticate `git`/`gh` operations inside a sandbox. Instead of storing a static token, point it at `get-ghapp-token.sh` with `--command` so the sandbox mints a fresh installation token itself, and refreshes it on a schedule before it expires.
+
+### Global scope
+
+Registers the command for every sandbox:
+
+```bash
+sbx secret set github \
+  --command '<path-to-script>/get-ghapp-token.sh <GitHub App Identity>' \
+  --refresh 50m
+```
+
+### Sandbox scope
+
+Add `--sandbox <sandbox name>` to the same command to scope it to a single sandbox instead:
+
+```bash
+sbx secret set github \
+  --command '<path-to-script>/get-ghapp-token.sh <GitHub App Identity>' \
+  --refresh 50m \
+  --sandbox <sandbox name>
+```
+
+### `sbxenv.yaml`
+
+The same secret can be declared per-project in `sbxenv.yaml`:
+
+```yaml
+secrets:
+  github:
+    command: /path/to/get-ghapp-token.sh ${{ env.args.appId }}
+    refresh: 50m
+```
+
+Since Installation Access Tokens expire after 1 hour, keep `--refresh`/`refresh` under 60 minutes — 50m leaves a safety margin without re-minting on every single command.
 
 ## Automatic Token Refresh (Cron)
 
