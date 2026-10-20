@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ── Logging (optional) ────────────────────────────────
+# When GITHUB_APP_LOG_FILE is set, append a timestamped line per step to
+# that file. Log output never goes to stdout, since callers do
+# TOKEN=$(./get-ghapp-token.sh) — only the bare token belongs there.
+# Unset (the default): no log file, no extra overhead.
+LOG_FILE="${GITHUB_APP_LOG_FILE:-}"
+log() {
+  if [[ -n "$LOG_FILE" ]]; then
+    printf '%s [get-ghapp-token] %s\n' "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" "$1" >>"$LOG_FILE" 2>/dev/null || true
+  fi
+}
+
 # ── Configuration ─────────────────────────────────────
 # APP_ID: GitHub App ID
 #   Option 1: Set GITHUB_APP_ID environment variable
@@ -11,11 +23,14 @@ APP_ID="${GITHUB_APP_ID:-${1:-}}"
 
 # ── Validation ────────────────────────────────────────
 if [[ -z "$APP_ID" ]]; then
+  log "ERROR: APP_ID is not set"
   echo "Error: APP_ID is not set" >&2
   echo "Usage: GITHUB_APP_ID=<id> $0" >&2
   echo "       $0 <app_id>" >&2
   exit 1
 fi
+
+log "Starting token generation for app_id=$APP_ID"
 
 # ── Keychain helpers (macOS only) ─────────────────────
 # Silently falls back to the file-based lookup when `security` is
@@ -48,6 +63,7 @@ if [[ -n "$PEM_B64" ]]; then
 fi
 
 if [[ -z "$PEM_CONTENT" ]] && [[ ! -f "$PEM_PATH" ]]; then
+  log "ERROR: Private key not found (keychain service=$KEYCHAIN_SERVICE, file=$PEM_PATH)"
   echo "Error: Private key not found" >&2
   echo "  Not present in Keychain (account: $PEM_KEYCHAIN_ACCOUNT, service: $KEYCHAIN_SERVICE)" >&2
   echo "  File not found: $PEM_PATH" >&2
@@ -55,8 +71,15 @@ if [[ -z "$PEM_CONTENT" ]] && [[ ! -f "$PEM_PATH" ]]; then
   exit 1
 fi
 
+if [[ -n "$PEM_CONTENT" ]]; then
+  log "Resolved private key from Keychain (service=$KEYCHAIN_SERVICE)"
+else
+  log "Resolved private key from file: $PEM_PATH"
+fi
+
 for cmd in openssl curl jq; do
   if ! command -v "$cmd" &>/dev/null; then
+    log "ERROR: Required command not found: $cmd"
     echo "Error: Required command not found: $cmd" >&2
     exit 1
   fi
@@ -76,6 +99,7 @@ if [[ -n "$PEM_CONTENT" ]]; then
   SIG=$(echo -n "${HEADER}.${PAYLOAD}" \
     | openssl dgst -sha256 -sign <(printf '%s\n' "$PEM_CONTENT") 2>/dev/null \
     | b64url) || {
+    log "ERROR: Failed to sign JWT using Keychain-stored PEM"
     echo "Error: Failed to sign JWT. Check the PEM stored in Keychain." >&2
     exit 1
   }
@@ -83,12 +107,14 @@ else
   SIG=$(echo -n "${HEADER}.${PAYLOAD}" \
     | openssl dgst -sha256 -sign "$PEM_PATH" 2>/dev/null \
     | b64url) || {
+    log "ERROR: Failed to sign JWT using PEM file: $PEM_PATH"
     echo "Error: Failed to sign JWT. Check your PEM file." >&2
     exit 1
   }
 fi
 
 JWT="${HEADER}.${PAYLOAD}.${SIG}"
+log "Generated JWT"
 
 # ── Get Installation ID ───────────────────────────────
 # By default the App's first installation is used, which only makes sense
@@ -98,11 +124,13 @@ JWT="${HEADER}.${PAYLOAD}.${SIG}"
 #   GITHUB_APP_INSTALLATION_LOGIN=<login> filters by account login (org/user)
 if [[ -n "${GITHUB_APP_INSTALLATION_ID:-}" ]]; then
   INSTALLATION_ID="$GITHUB_APP_INSTALLATION_ID"
+  log "Using installation_id=$INSTALLATION_ID from GITHUB_APP_INSTALLATION_ID"
 else
   INSTALLATIONS=$(curl -sf \
     -H "Authorization: Bearer $JWT" \
     -H "Accept: application/vnd.github+json" \
     https://api.github.com/app/installations) || {
+    log "ERROR: Failed to reach GitHub API (GET /app/installations)"
     echo "Error: Failed to reach GitHub API. Check your APP_ID and PEM file." >&2
     exit 1
   }
@@ -111,16 +139,20 @@ else
     INSTALLATION_ID=$(echo "$INSTALLATIONS" | jq -r --arg login "$GITHUB_APP_INSTALLATION_LOGIN" \
       '.[] | select(.account.login == $login) | .id' | head -n 1)
     if [[ -z "$INSTALLATION_ID" ]]; then
+      log "ERROR: No installation found for account '$GITHUB_APP_INSTALLATION_LOGIN'"
       echo "Error: No installation found for account '$GITHUB_APP_INSTALLATION_LOGIN'." >&2
       echo "  Available accounts: $(echo "$INSTALLATIONS" | jq -r '[.[].account.login] | join(", ")')" >&2
       exit 1
     fi
+    log "Resolved installation_id=$INSTALLATION_ID via GITHUB_APP_INSTALLATION_LOGIN=$GITHUB_APP_INSTALLATION_LOGIN"
   else
     INSTALLATION_ID=$(echo "$INSTALLATIONS" | jq -r '.[0].id // empty')
+    log "Resolved installation_id=$INSTALLATION_ID (first installation returned by the API)"
   fi
 fi
 
 if [[ -z "$INSTALLATION_ID" ]]; then
+  log "ERROR: No installations found for this GitHub App"
   echo "Error: No installations found for this GitHub App." >&2
   exit 1
 fi
@@ -131,6 +163,7 @@ TOKEN_RESPONSE=$(curl -sf \
   -H "Authorization: Bearer $JWT" \
   -H "Accept: application/vnd.github+json" \
   "https://api.github.com/app/installations/$INSTALLATION_ID/access_tokens") || {
+  log "ERROR: Failed to obtain access token for installation_id=$INSTALLATION_ID"
   echo "Error: Failed to obtain access token." >&2
   exit 1
 }
@@ -138,8 +171,10 @@ TOKEN_RESPONSE=$(curl -sf \
 TOKEN=$(echo "$TOKEN_RESPONSE" | jq -r '.token // empty')
 
 if [[ -z "$TOKEN" ]]; then
+  log "ERROR: Token not found in response"
   echo "Error: Token not found in response." >&2
   exit 1
 fi
 
+log "Issued installation access token for installation_id=$INSTALLATION_ID"
 echo "$TOKEN"
