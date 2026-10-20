@@ -91,15 +91,34 @@ fi
 JWT="${HEADER}.${PAYLOAD}.${SIG}"
 
 # ── Get Installation ID ───────────────────────────────
-INSTALLATIONS=$(curl -sf \
-  -H "Authorization: Bearer $JWT" \
-  -H "Accept: application/vnd.github+json" \
-  https://api.github.com/app/installations) || {
-  echo "Error: Failed to reach GitHub API. Check your APP_ID and PEM file." >&2
-  exit 1
-}
+# By default the App's first installation is used, which only makes sense
+# when the App is installed in exactly one place. If it is installed on
+# multiple orgs/repos, target a specific one with:
+#   GITHUB_APP_INSTALLATION_ID=<id>       skips the lookup entirely
+#   GITHUB_APP_INSTALLATION_LOGIN=<login> filters by account login (org/user)
+if [[ -n "${GITHUB_APP_INSTALLATION_ID:-}" ]]; then
+  INSTALLATION_ID="$GITHUB_APP_INSTALLATION_ID"
+else
+  INSTALLATIONS=$(curl -sf \
+    -H "Authorization: Bearer $JWT" \
+    -H "Accept: application/vnd.github+json" \
+    https://api.github.com/app/installations) || {
+    echo "Error: Failed to reach GitHub API. Check your APP_ID and PEM file." >&2
+    exit 1
+  }
 
-INSTALLATION_ID=$(echo "$INSTALLATIONS" | jq -r '.[0].id // empty')
+  if [[ -n "${GITHUB_APP_INSTALLATION_LOGIN:-}" ]]; then
+    INSTALLATION_ID=$(echo "$INSTALLATIONS" | jq -r --arg login "$GITHUB_APP_INSTALLATION_LOGIN" \
+      '.[] | select(.account.login == $login) | .id' | head -n 1)
+    if [[ -z "$INSTALLATION_ID" ]]; then
+      echo "Error: No installation found for account '$GITHUB_APP_INSTALLATION_LOGIN'." >&2
+      echo "  Available accounts: $(echo "$INSTALLATIONS" | jq -r '[.[].account.login] | join(", ")')" >&2
+      exit 1
+    fi
+  else
+    INSTALLATION_ID=$(echo "$INSTALLATIONS" | jq -r '.[0].id // empty')
+  fi
+fi
 
 if [[ -z "$INSTALLATION_ID" ]]; then
   echo "Error: No installations found for this GitHub App." >&2
