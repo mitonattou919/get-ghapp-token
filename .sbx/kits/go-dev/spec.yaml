@@ -1,0 +1,39 @@
+schemaVersion: "2"
+kind: mixin
+name: go-dev
+description: Go toolchain and dev tools for the get-ghapp-token Go rewrite (#14)
+
+args:
+  goimports_version:
+    default: "v0.52.0"
+  gopls_version:
+    default: "v0.24.0"
+  golangci_lint_version:
+    default: "v2.15.0"
+  goreleaser_version:
+    default: "v2.18.3"
+
+permissions:
+  network:
+    allow:
+      - proxy.golang.org
+      - sum.golang.org
+      - ports.ubuntu.com
+      - archive.ubuntu.com
+      - security.ubuntu.com
+
+setup:
+  install:
+    - description: Install Go if the template does not ship it
+      command: "command -v go >/dev/null || (apt-get update && apt-get install -y --no-install-recommends golang-go)"
+      user: "0"
+    - description: Add ~/go/bin to PATH
+      command: "grep -q 'go/bin' /etc/sandbox-persistent.sh || echo 'export PATH=\"$PATH:$HOME/go/bin\"' >> /etc/sandbox-persistent.sh"
+      user: "0"
+    - description: Install pinned Go dev tools
+      command: >-
+        go install golang.org/x/tools/cmd/goimports@${{ kit.args.goimports_version }} &&
+        go install golang.org/x/tools/gopls@${{ kit.args.gopls_version }} &&
+        go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${{ kit.args.golangci_lint_version }} &&
+        go install github.com/goreleaser/goreleaser/v2@${{ kit.args.goreleaser_version }}
+      user: "1000"
