@@ -22,6 +22,8 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      # GitHub OIDC token for Workload Identity Federation with the Claude API.
+      id-token: write
     steps:
       # No toolchain and no build/test commands: this job holds secrets, so it
       # must not execute code from the PR. go.yml covers build, test and lint.
@@ -42,7 +44,11 @@ jobs:
       - uses: anthropics/claude-code-action@6b6870e649b5ff408753befeaee5fc7989d4e6a9 # v1.0.258
         with:
           github_token: ${{ steps.app-token.outputs.token }}
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Workload Identity Federation: no static Claude credential is stored.
+          # These are identifiers, not secrets.
+          anthropic_federation_rule_id: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+          anthropic_organization_id: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+          anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
           # PRs here are opened by this bot; any other bot stays rejected.
           allowed_bots: mitonattou919-claude-code
           show_full_output: true # TEMP: debugging first run; remove before merge
