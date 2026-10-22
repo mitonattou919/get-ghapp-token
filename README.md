@@ -89,13 +89,13 @@ The PEM only ever exists as base64 text in Keychain and as decoded plaintext in 
 
 The PEM is read straight from disk and handed to `openssl` by path — nothing is decoded or cached in memory beforehand.
 
-The Go binary follows the same flow, with Go's `crypto/rsa` in place of `openssl` and `net/http` in place of `curl`. It still calls `security` for the Keychain read, and the PEM is likewise only ever held in memory.
+The Go binary follows the same flow, with Go's `crypto/rsa` in place of `openssl` and `net/http` in place of `curl`. It still calls `security` for the Keychain read. In both modes the Go binary reads the PEM into memory and never writes it anywhere.
 
 ## Prerequisites
 
 - GitHub App must be installed on the target repository
 - Shell script: bash, openssl, curl, jq
-- Go binary: nothing at runtime. Building with `go install` needs Go 1.21+ (the pinned toolchain is downloaded automatically)
+- Go binary: nothing at runtime. Building with `go install` needs Go 1.26+, or Go 1.21+ with the default `GOTOOLCHAIN=auto`, which downloads the pinned toolchain (some distro-packaged Go sets `GOTOOLCHAIN=local`, which disables this)
 
 ## Setup
 
@@ -255,7 +255,7 @@ The binary lands in `$(go env GOBIN)`, or `$(go env GOPATH)/bin` (usually `~/go/
 
 ### Install from a release
 
-Release builds are published for macOS (`arm64` for Apple silicon, `amd64` for Intel) together with a `sha256sums.txt`. Builds are reproducible, so the same commit and toolchain always produce the same checksums. Check the archive against `sha256sums.txt` before installing:
+Release builds are published for macOS (`arm64` for Apple silicon, `amd64` for Intel) together with a `sha256sums.txt`. The build is configured to be reproducible (`-trimpath`, no cgo, timestamps and file owners fixed to the commit), so the same commit and toolchain should produce the same checksums. Check the archive against `sha256sums.txt` before installing. The steps are chained with `&&`, so nothing is extracted or installed unless the check prints `OK`:
 
 ```bash
 VERSION=x.y.z   # see https://github.com/mitonattou919/get-ghapp-token/releases
@@ -265,11 +265,15 @@ ARCHIVE=ghapp-token_${VERSION}_darwin_${ARCH}.tar.gz
 
 curl -fsSLO "${BASE}/${ARCHIVE}"
 curl -fsSLO "${BASE}/sha256sums.txt"
-grep " ${ARCHIVE}\$" sha256sums.txt | shasum -a 256 -c -   # must print "OK"
-
-tar xzf "${ARCHIVE}" ghapp-token
-install -m 755 ghapp-token /usr/local/bin/ghapp-token
+grep " ${ARCHIVE}\$" sha256sums.txt | shasum -a 256 -c - \
+  && tar xzf "${ARCHIVE}" ghapp-token \
+  && install -d ~/.local/bin \
+  && install -m 755 ghapp-token ~/.local/bin/ghapp-token
 ```
+
+This installs into `~/.local/bin`, which needs no `sudo`; add it to your `PATH` if it isn't there yet. To install system-wide instead, use `sudo install -d /usr/local/bin` and `sudo install -m 755 ghapp-token /usr/local/bin/ghapp-token` (`/usr/local/bin` may not exist on a fresh Apple silicon Mac).
+
+`sha256sums.txt` is published in the same release as the archives, so this check detects a corrupted or incomplete download, not a tampered release. Build provenance attestation is tracked in #28.
 
 The binaries are not signed or notarized by Apple. Files fetched with `curl` aren't quarantined, so they run as-is; if you download an archive through a browser instead, Gatekeeper will block the binary until you remove the quarantine attribute (`xattr -d com.apple.quarantine ghapp-token`).
 
@@ -363,18 +367,18 @@ secrets:
 
 ### Using the Go binary
 
-Point `--command` (or `command:`) at `ghapp-token` instead. Use an absolute path, since the command isn't run from your interactive shell and may not see your `PATH`:
+Point `--command` (or `command:`) at `ghapp-token` instead. Use an absolute path, since the command isn't run from your interactive shell and may not see your `PATH`. `command -v ghapp-token` prints it, whichever way you installed the binary:
 
 ```bash
 sbx secret set github \
-  --command "$(go env GOPATH)/bin/ghapp-token <GitHub App Identity>" \
+  --command "$(command -v ghapp-token) <GitHub App Identity>" \
   --refresh 50m
 ```
 
 ```yaml
 secrets:
   github:
-    command: /usr/local/bin/ghapp-token ${{ env.args.appId }}
+    command: /path/to/ghapp-token ${{ env.args.appId }}   # output of `command -v ghapp-token`
     refresh: 50m
 ```
 
@@ -456,7 +460,7 @@ claude-gh-cached() {
 - Follow the principle of least privilege and grant only the minimum required permissions to the GitHub App
 - Keychain storage (Option A) keeps the PEM off disk after initial import; the base64-encoded Keychain entry and the decoded in-memory PEM are never written to a file
 - The cached installation token written by `refresh-ghapp-token.sh` is itself a bearer credential with the same 1-hour lifetime and should be treated with the same care as any token in memory
-- Verify Go release archives against `sha256sums.txt` before installing (see [Install from a release](#install-from-a-release))
+- Check Go release archives against `sha256sums.txt` before installing (see [Install from a release](#install-from-a-release)). This catches corrupted downloads; it doesn't prove where the archive was built, since the checksums ship in the same release
 
 ## Troubleshooting
 
