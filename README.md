@@ -3,6 +3,20 @@
 A shell script that generates an Installation Access Token using a GitHub App's private key (PEM).
 Useful for obtaining bot tokens when operating GitHub from tools like Claude Code.
 
+The same tool also ships as a Go binary, `ghapp-token` — a drop-in alternative with the same
+environment variables, output, error messages and exit codes. See [Go Binary](#go-binary-ghapp-token).
+
+|  | Shell script (`get-ghapp-token.sh`) | Go binary (`ghapp-token`) |
+|--|--|--|
+| Runtime dependencies | bash, openssl, curl, jq | None (single static binary) |
+| Platforms | macOS, Linux | Release binaries: macOS (arm64, amd64). `go install`: macOS, Linux |
+| Install | Copy the script | `go install`, or download a release and verify `sha256sums.txt` |
+| Auditing | Read the script top to bottom | Open source; reproducible builds; published checksums |
+| Keychain | Reads the PEM; `refresh-ghapp-token.sh` caches tokens | Reads the PEM only |
+
+The shell script remains the reference implementation and the zero-build option; the Go binary
+suits non-interactive use (CI, Docker Sandboxes) where installing `openssl`/`curl`/`jq` is a nuisance.
+
 ## How It Works
 
 ```
@@ -75,13 +89,13 @@ The PEM only ever exists as base64 text in Keychain and as decoded plaintext in 
 
 The PEM is read straight from disk and handed to `openssl` by path — nothing is decoded or cached in memory beforehand.
 
+The Go binary follows the same flow, with Go's `crypto/rsa` in place of `openssl` and `net/http` in place of `curl`. It still calls `security` for the Keychain read, and the PEM is likewise only ever held in memory.
+
 ## Prerequisites
 
-- bash
-- openssl
-- curl
-- jq
 - GitHub App must be installed on the target repository
+- Shell script: bash, openssl, curl, jq
+- Go binary: nothing at runtime. Building with `go install` needs Go 1.21+ (the pinned toolchain is downloaded automatically)
 
 ## Setup
 
@@ -197,6 +211,8 @@ If `security` is unavailable (non-macOS) or no Keychain entry is registered,
 the script falls back to the file-based PEM lookup silently — no error, no
 change in behavior from before Keychain support existed.
 
+The Go binary uses exactly the same priority order.
+
 ## Usage
 
 ```bash
@@ -225,6 +241,55 @@ TOKEN=$(./get-ghapp-token.sh)
 curl -H "Authorization: Bearer $TOKEN" https://api.github.com/repos/your-org/your-repo
 ```
 
+## Go Binary (`ghapp-token`)
+
+`ghapp-token` is a Go port of `get-ghapp-token.sh`. It reads the same environment variables, uses the same [lookup priority](#credential-lookup-priority), and prints the same stderr messages, log lines and exit codes, so it can replace the script in existing automation. It uses only the Go standard library.
+
+### Install with `go install`
+
+```bash
+go install github.com/mitonattou919/get-ghapp-token/cmd/ghapp-token@latest
+```
+
+The binary lands in `$(go env GOBIN)`, or `$(go env GOPATH)/bin` (usually `~/go/bin`) when `GOBIN` is unset; make sure that directory is on your `PATH`.
+
+### Install from a release
+
+Release builds are published for macOS (`arm64` for Apple silicon, `amd64` for Intel) together with a `sha256sums.txt`. Builds are reproducible, so the same commit and toolchain always produce the same checksums. Check the archive against `sha256sums.txt` before installing:
+
+```bash
+VERSION=x.y.z   # see https://github.com/mitonattou919/get-ghapp-token/releases
+ARCH=arm64      # or amd64
+BASE=https://github.com/mitonattou919/get-ghapp-token/releases/download/v${VERSION}
+ARCHIVE=ghapp-token_${VERSION}_darwin_${ARCH}.tar.gz
+
+curl -fsSLO "${BASE}/${ARCHIVE}"
+curl -fsSLO "${BASE}/sha256sums.txt"
+grep " ${ARCHIVE}\$" sha256sums.txt | shasum -a 256 -c -   # must print "OK"
+
+tar xzf "${ARCHIVE}" ghapp-token
+install -m 755 ghapp-token /usr/local/bin/ghapp-token
+```
+
+The binaries are not signed or notarized by Apple. Files fetched with `curl` aren't quarantined, so they run as-is; if you download an archive through a browser instead, Gatekeeper will block the binary until you remove the quarantine attribute (`xattr -d com.apple.quarantine ghapp-token`).
+
+### Usage
+
+Identical to the script — swap `./get-ghapp-token.sh` for `ghapp-token`:
+
+```bash
+ghapp-token                          # with GITHUB_APP_ID already set
+ghapp-token 1234567                  # App ID as an argument
+GITHUB_APP_ID=1234567 ghapp-token    # inline
+TOKEN=$(ghapp-token)
+```
+
+### Scope
+
+- **Keychain is read-only.** `ghapp-token` reads the base64 PEM from Keychain via `security`, exactly like the script, so the same Keychain entry works for both and no extra access prompts appear. Registering the PEM (`security add-generic-password`, see [Option A](#option-a-macos-keychain-recommended-on-macos)) stays a manual setup step.
+- **No token caching.** [Automatic token refresh](#automatic-token-refresh-cron) is still done by `refresh-ghapp-token.sh`, which calls `get-ghapp-token.sh`.
+- **Log lines** keep the `[get-ghapp-token]` tag, so existing log filters keep working. A log file created by `ghapp-token` gets `0600` permissions.
+
 ## Claude Code Integration
 
 When using this script with Claude Code, define a shell function in your `~/.zshrc` or `~/.bashrc` to automatically set up the token before launching Claude.
@@ -242,6 +307,12 @@ claude-gh() {
 
   claude "$@"
 }
+```
+
+With the Go binary, only the token line changes:
+
+```zsh
+  export GH_TOKEN=$(ghapp-token)
 ```
 
 Using `GIT_CONFIG_*` environment variables instead of `gh auth setup-git` scopes the git credential helper to the Claude process only, leaving your global `~/.gitconfig` untouched.
@@ -287,6 +358,23 @@ The same secret can be declared per-project in `sbxenv.yaml`:
 secrets:
   github:
     command: /path/to/get-ghapp-token.sh ${{ env.args.appId }}
+    refresh: 50m
+```
+
+### Using the Go binary
+
+Point `--command` (or `command:`) at `ghapp-token` instead. Use an absolute path, since the command isn't run from your interactive shell and may not see your `PATH`:
+
+```bash
+sbx secret set github \
+  --command "$(go env GOPATH)/bin/ghapp-token <GitHub App Identity>" \
+  --refresh 50m
+```
+
+```yaml
+secrets:
+  github:
+    command: /usr/local/bin/ghapp-token ${{ env.args.appId }}
     refresh: 50m
 ```
 
@@ -368,6 +456,7 @@ claude-gh-cached() {
 - Follow the principle of least privilege and grant only the minimum required permissions to the GitHub App
 - Keychain storage (Option A) keeps the PEM off disk after initial import; the base64-encoded Keychain entry and the decoded in-memory PEM are never written to a file
 - The cached installation token written by `refresh-ghapp-token.sh` is itself a bearer credential with the same 1-hour lifetime and should be treated with the same care as any token in memory
+- Verify Go release archives against `sha256sums.txt` before installing (see [Install from a release](#install-from-a-release))
 
 ## Troubleshooting
 
@@ -377,9 +466,12 @@ claude-gh-cached() {
 | `Private key not found` | The PEM is absent from both Keychain (service `ghapp-token:<APP_ID>`, account `pem`) and `GITHUB_APP_PEM_PATH` | Register via `security add-generic-password` (base64-encoded) or fix `GITHUB_APP_PEM_PATH` |
 | `Failed to sign JWT. Check the PEM stored in Keychain.` | The Keychain entry isn't valid base64, or decodes to a corrupt/invalid PEM | Re-run the `security add-generic-password -U` command with a fresh `openssl base64 -A` encode of a known-good PEM |
 | `Failed to sign JWT. Check your PEM file.` | The PEM file is corrupted or in an invalid format | Regenerate the key from the GitHub App settings page |
-| `Failed to access GitHub API` | Network error or invalid JWT | Verify the App ID and PEM combination |
-| `Installation not found` | The App is not installed on the target repository | Install the GitHub App from its settings page |
+| `Failed to reach GitHub API. Check your APP_ID and PEM file.` | Network error, or GitHub rejected the JWT (wrong App ID / PEM pair) | Verify the App ID and PEM combination |
+| `No installations found for this GitHub App.` | The App isn't installed anywhere yet | Install the GitHub App from its settings page |
 | `No installation found for account '<login>'` | `GITHUB_APP_INSTALLATION_LOGIN` doesn't match any installation's account login | Check the available accounts listed alongside the error, or unset the variable to use the first installation |
+| `Failed to obtain access token.` | The token request was rejected (e.g. `GITHUB_APP_INSTALLATION_ID` doesn't belong to this App) or a network error | Check `GITHUB_APP_INSTALLATION_ID`, or unset it to look the installation up |
+| `Token not found in response.` | GitHub answered without a token | Retry; check [GitHub status](https://www.githubstatus.com) if it persists |
+| `Required command not found: <cmd>` (shell script only) | `openssl`, `curl` or `jq` isn't on `PATH` | Install it, or use the Go binary, which has no runtime dependencies |
 | `'security' command not found` (from `refresh-ghapp-token.sh`) | Running on non-macOS | `refresh-ghapp-token.sh` requires the macOS Keychain; not supported elsewhere |
 | Cron job silently does nothing / stale token never refreshes | Cron's minimal `PATH`/env doesn't have `GITHUB_APP_ID` or `openssl`/`curl`/`jq` | Set `GITHUB_APP_ID` inline on the crontab line; use absolute paths or extend `PATH` in the crontab |
 
