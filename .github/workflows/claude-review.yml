@@ -51,7 +51,6 @@ jobs:
           anthropic_service_account_id: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
           # PRs here are opened by this bot; any other bot stays rejected.
           allowed_bots: mitonattou919-claude-code
-          show_full_output: true # TEMP: debugging first run; remove before merge
           prompt: |
             REPO: ${{ github.repository }}
             PR NUMBER: ${{ github.event.pull_request.number }}
