@@ -1,0 +1,42 @@
+version: 2
+
+project_name: ghapp-token
+
+builds:
+  - id: ghapp-token
+    main: ./cmd/ghapp-token
+    binary: ghapp-token
+    # Linux targets will be added once there's a concrete use case (#19).
+    goos: [darwin]
+    goarch: [amd64, arm64]
+    # Reproducible builds: same commit + toolchain => byte-identical binaries,
+    # verifiable against sha256sums.txt.
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    # Fixed owner/mtime so archive checksums don't depend on who built them.
+    builds_info:
+      owner: root
+      group: root
+      mtime: "{{ .CommitDate }}"
+    files:
+      - src: README.md
+        info:
+          owner: root
+          group: root
+          mtime: "{{ .CommitDate }}"
+
+checksum:
+  name_template: sha256sums.txt
+  algorithm: sha256
+
+changelog:
+  sort: asc
