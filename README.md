@@ -257,7 +257,7 @@ The binary lands in `$(go env GOBIN)`, or `$(go env GOPATH)/bin` (usually `~/go/
 
 Release builds are published for macOS (`arm64` for Apple silicon, `amd64` for Intel) together with a `sha256sums.txt`. The build is configured to be reproducible (`-trimpath`, no cgo, timestamps and file owners fixed to the commit), so the same commit and toolchain should produce the same checksums. Each release also carries a signed [build provenance attestation](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations) proving the archives were built by this repository's release workflow from the release tag.
 
-Verify both before installing. The steps are chained with `&&`, so nothing is extracted or installed unless both checks pass. `gh attestation verify` needs [GitHub CLI](https://cli.github.com) 2.68 or later (for `--source-ref`):
+Verify both before installing. The steps are chained with `&&`, so nothing is extracted or installed unless both checks pass. `gh attestation verify` needs [GitHub CLI](https://cli.github.com) 2.68 or later (for `--source-ref`), signed in with `gh auth login`, because it fetches the attestation from the GitHub API:
 
 ```bash
 VERSION=x.y.z   # see https://github.com/mitonattou919/get-ghapp-token/releases
@@ -280,7 +280,7 @@ grep " ${ARCHIVE}\$" sha256sums.txt | shasum -a 256 -c - \
 
 This installs into `~/.local/bin`, which needs no `sudo`; add it to your `PATH` if it isn't there yet. To install system-wide instead, use `sudo install -d /usr/local/bin` and `sudo install -m 755 ghapp-token /usr/local/bin/ghapp-token` (`/usr/local/bin` may not exist on a fresh Apple silicon Mac).
 
-The two checks cover different things. `sha256sums.txt` is published in the same release as the archives, so on its own it only detects a corrupted or incomplete download. The attestation is signed through Sigstore with a certificate bound to the workflow run, so it also fails if the archive was replaced or built anywhere other than `release.yml` at that tag.
+The two checks cover different things. `sha256sums.txt` is published in the same release as the archives, so on its own it only detects a corrupted or incomplete download. The attestation is signed through Sigstore with a certificate bound to the workflow run, so it fails for any archive that wasn't produced by `release.yml` running at that tag. (It doesn't pin a single build: re-running the release workflow at the same tag yields a new archive with its own valid attestation.) Releases are only published after their attestation exists, so a published release can always be verified.
 
 The binaries are not signed or notarized by Apple. Files fetched with `curl` aren't quarantined, so they run as-is; if you download an archive through a browser instead, Gatekeeper will block the binary until you remove the quarantine attribute (`xattr -d com.apple.quarantine ghapp-token`).
 
