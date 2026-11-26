@@ -41,7 +41,7 @@ jobs:
           permission-contents: read
           permission-pull-requests: write
 
-      - uses: anthropics/claude-code-action@6b6870e649b5ff408753befeaee5fc7989d4e6a9 # v1.0.258
+      - uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
         with:
           github_token: ${{ steps.app-token.outputs.token }}
           # Workload Identity Federation: no static Claude credential is stored.
